@@ -41,23 +41,29 @@ export default async (request) => {
       throw new Error("Unsupported image format: " + image.type);
     }
 
-    // Send image to QR decoder
-    const decoderForm = new FormData();
+    
+// Send image to QR decoder
+const imageBytes = await image.arrayBuffer();
 
-// Important: this field must come before the file
+const decoderForm = new FormData();
+
+// The API requires this field before the file field
 decoderForm.append("MAX_FILE_SIZE", "1048576");
 
-// Upload the actual image
+// Explicitly construct a Blob from the uploaded image bytes
+const imageBlob = new Blob([imageBytes], {
+  type: image.type
+});
+
 decoderForm.append(
   "file",
-  image,
-  image.name || "runninghub.png"
+  imageBlob,
+  "runninghub.png"
 );
 
-decoderForm.append("outputformat", "json");
-
-    const decoderResponse = await fetch(
-  "https://api.qrserver.com/v1/read-qr-code/",
+// Keep outputformat in the URL, not in multipart data
+const decoderResponse = await fetch(
+  "https://api.qrserver.com/v1/read-qr-code/?outputformat=json",
   {
     method: "POST",
     body: decoderForm
@@ -80,14 +86,17 @@ let decoded;
 try {
   decoded = JSON.parse(decoderText);
 } catch {
-  throw new Error("QR decoder returned invalid JSON: " + decoderText);
+  throw new Error("Invalid QR decoder JSON: " + decoderText);
 }
-    const symbol = decoded?.[0]?.symbol?.[0];
-    const message = symbol?.data;
 
-    if (!message) {
-      throw new Error(symbol?.error || "No QR code found");
-    }
+const symbol = decoded?.[0]?.symbol?.[0];
+const message = symbol?.data;
+
+if (!message) {
+  throw new Error(
+    symbol?.error || "No QR code found in uploaded image"
+  );
+}
 
     // Forward decoded text to Google Sheets
     const sheetsResponse = await fetch(
