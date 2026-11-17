@@ -1,10 +1,15 @@
 
+import jsQR from "jsqr";
+import { PNG } from "pngjs";
+import jpeg from "jpeg-js";
+
 export default async (request) => {
   try {
     if (request.method === "GET") {
       return Response.json({
         status: "online",
-        service: "RunningHub QR Receiver"
+        service: "RunningHub QR Receiver",
+        decoder: "Local JavaScript QR decoder"
       });
     }
 
@@ -15,17 +20,20 @@ export default async (request) => {
       );
     }
 
-    // Authenticate using URL token
+    // Authenticate request
     const url = new URL(request.url);
 
-    if (url.searchParams.get("token") !== process.env.UPLOAD_TOKEN) {
+    if (
+      !process.env.UPLOAD_TOKEN ||
+      url.searchParams.get("token") !== process.env.UPLOAD_TOKEN
+    ) {
       return Response.json(
         { status: "error", message: "Unauthorized" },
         { status: 401 }
       );
     }
 
-    // Receive uploaded QR image
+    // Receive uploaded image
     const form = await request.formData();
     const image = form.get("image");
 
@@ -33,72 +41,80 @@ export default async (request) => {
       throw new Error("Missing image field");
     }
 
-    if (image.size > 1048576) {
-      throw new Error("Image exceeds 1 MB");
+    if (image.size > 10 * 1024 * 1024) {
+      throw new Error("Image exceeds 10 MB");
     }
 
-    if (!["image/png", "image/jpeg", "image/gif"].includes(image.type)) {
-      throw new Error("Unsupported image format: " + image.type);
+    const buffer = Buffer.from(await image.arrayBuffer());
+
+    // Identify image by its actual file signature
+    let decodedImage;
+
+    const isPNG =
+      buffer.length >= 8 &&
+      buffer[0] === 0x89 &&
+      buffer[1] === 0x50 &&
+      buffer[2] === 0x4E &&
+      buffer[3] === 0x47;
+
+    const isJPEG =
+      buffer.length >= 3 &&
+      buffer[0] === 0xFF &&
+      buffer[1] === 0xD8 &&
+      buffer[2] === 0xFF;
+
+    if (isPNG) {
+      const png = PNG.sync.read(buffer);
+
+      decodedImage = {
+        data: new Uint8ClampedArray(png.data),
+        width: png.width,
+        height: png.height
+      };
+
+    } else if (isJPEG) {
+      const jpg = jpeg.decode(buffer, {
+        useTArray: true
+      });
+
+      decodedImage = {
+        data: new Uint8ClampedArray(jpg.data),
+        width: jpg.width,
+        height: jpg.height
+      };
+
+    } else {
+      throw new Error(
+        "Unsupported image data. Please use PNG or JPEG."
+      );
     }
 
-    
-// Send image to QR decoder
-const imageBytes = await image.arrayBuffer();
+    // Decode QR locally - no external decoder API
+    const qr = jsQR(
+      decodedImage.data,
+      decodedImage.width,
+      decodedImage.height,
+      {
+        inversionAttempts: "attemptBoth"
+      }
+    );
 
-const decoderForm = new FormData();
+    if (!qr || !qr.data) {
+      throw new Error(
+        "No QR code detected. Check QR image quality and size."
+      );
+    }
 
-// The API requires this field before the file field
-decoderForm.append("MAX_FILE_SIZE", "1048576");
+    const message = qr.data;
 
-// Explicitly construct a Blob from the uploaded image bytes
-const imageBlob = new Blob([imageBytes], {
-  type: image.type
-});
+    // Send decoded text to Google Apps Script
+    if (
+      !process.env.SHEETS_WEB_APP_URL ||
+      !process.env.SHEETS_SECRET
+    ) {
+      throw new Error("Google Sheets environment variables missing");
+    }
 
-decoderForm.append(
-  "file",
-  imageBlob,
-  "runninghub.png"
-);
-
-// Keep outputformat in the URL, not in multipart data
-const decoderResponse = await fetch(
-  "https://api.qrserver.com/v1/read-qr-code/?outputformat=json",
-  {
-    method: "POST",
-    body: decoderForm
-  }
-);
-
-const decoderText = await decoderResponse.text();
-
-if (!decoderResponse.ok) {
-  throw new Error(
-    "QR decoder HTTP " +
-    decoderResponse.status +
-    " | Response: " +
-    decoderText
-  );
-}
-
-let decoded;
-
-try {
-  decoded = JSON.parse(decoderText);
-} catch {
-  throw new Error("Invalid QR decoder JSON: " + decoderText);
-}
-
-const symbol = decoded?.[0]?.symbol?.[0];
-const message = symbol?.data;
-
-if (!message) {
-  throw new Error(
-    symbol?.error || "No QR code found in uploaded image"
-  );
-}
-
-    // Forward decoded text to Google Sheets
     const sheetsResponse = await fetch(
       process.env.SHEETS_WEB_APP_URL,
       {
@@ -119,7 +135,8 @@ if (!message) {
     if (!sheetsResponse.ok) {
       throw new Error(
         "Google Apps Script HTTP " +
-        sheetsResponse.status + ": " + sheetsText
+        sheetsResponse.status +
+        ": " + sheetsText
       );
     }
 
@@ -128,7 +145,9 @@ if (!message) {
     try {
       sheetsResult = JSON.parse(sheetsText);
     } catch {
-      throw new Error("Invalid Google Apps Script response: " + sheetsText);
+      throw new Error(
+        "Invalid Google Apps Script response: " + sheetsText
+      );
     }
 
     if (sheetsResult.status !== "success") {
@@ -140,6 +159,9 @@ if (!message) {
     return Response.json({
       status: "success",
       decoded_message: message,
+      image_width: decodedImage.width,
+      image_height: decodedImage.height,
+      decoder: "Local JavaScript",
       sheets: "updated"
     });
 
