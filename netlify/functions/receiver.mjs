@@ -43,8 +43,18 @@ export default async (request) => {
 
     // Send image to QR decoder
     const decoderForm = new FormData();
-    decoderForm.append("file", image, "runninghub.png");
-    decoderForm.append("outputformat", "json");
+
+// Important: this field must come before the file
+decoderForm.append("MAX_FILE_SIZE", "1048576");
+
+// Upload the actual image
+decoderForm.append(
+  "file",
+  image,
+  image.name || "runninghub.png"
+);
+
+decoderForm.append("outputformat", "json");
 
     const decoderResponse = await fetch(
   "https://api.qrserver.com/v1/read-qr-code/",
