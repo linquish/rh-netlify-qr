@@ -47,19 +47,31 @@ export default async (request) => {
     decoderForm.append("outputformat", "json");
 
     const decoderResponse = await fetch(
-      "https://api.qrserver.com/v1/read-qr-code/",
-      {
-        method: "POST",
-        body: decoderForm
-      }
-    );
+  "https://api.qrserver.com/v1/read-qr-code/",
+  {
+    method: "POST",
+    body: decoderForm
+  }
+);
 
-    if (!decoderResponse.ok) {
-      throw new Error("QR decoder HTTP " + decoderResponse.status);
-    }
+const decoderText = await decoderResponse.text();
 
-    const decoded = await decoderResponse.json();
+if (!decoderResponse.ok) {
+  throw new Error(
+    "QR decoder HTTP " +
+    decoderResponse.status +
+    " | Response: " +
+    decoderText
+  );
+}
 
+let decoded;
+
+try {
+  decoded = JSON.parse(decoderText);
+} catch {
+  throw new Error("QR decoder returned invalid JSON: " + decoderText);
+}
     const symbol = decoded?.[0]?.symbol?.[0];
     const message = symbol?.data;
 
