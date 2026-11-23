@@ -134,7 +134,7 @@ export default async (request) => {
 
     // Forward decoded result
     const payload = {
-      secret: process.env.SHEETS_SECRET,
+      secret: String(process.env.SHEETS_SECRET || "").trim(),
       message: message,
       source: "RunningHub",
       sheetName: row !== null
