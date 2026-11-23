@@ -33,6 +33,21 @@ export default async (request) => {
       );
     }
 
+    // Read optional Google Sheets row number
+    const rowParam = url.searchParams.get("row");
+    let row = null;
+
+    if (rowParam !== null) {
+      row = Number(rowParam);
+
+      if (!Number.isInteger(row) || row < 8) {
+        return Response.json(
+          { status: "error", message: "Invalid task row number" },
+          { status: 400 }
+        );
+      }
+    }
+
     // Receive uploaded image
     const form = await request.formData();
     const image = form.get("image");
@@ -47,7 +62,7 @@ export default async (request) => {
 
     const buffer = Buffer.from(await image.arrayBuffer());
 
-    // Identify image by its actual file signature
+    // Identify image by actual file signature
     let decodedImage;
 
     const isPNG =
@@ -89,7 +104,7 @@ export default async (request) => {
       );
     }
 
-    // Decode QR locally - no external decoder API
+    // Decode QR locally
     const qr = jsQR(
       decodedImage.data,
       decodedImage.width,
@@ -107,13 +122,26 @@ export default async (request) => {
 
     const message = qr.data;
 
-    // Send decoded text to Google Apps Script
+    // Google Apps Script configuration
     if (
       !process.env.SHEETS_WEB_APP_URL ||
       !process.env.SHEETS_SECRET
     ) {
-      throw new Error("Google Sheets environment variables missing");
+      throw new Error(
+        "Google Sheets environment variables missing"
+      );
     }
+
+    // Forward decoded result
+    const payload = {
+      secret: process.env.SHEETS_SECRET,
+      message: message,
+      source: "RunningHub",
+      sheetName: row !== null
+        ? "RH_2124789792373309441"
+        : undefined,
+      row: row
+    };
 
     const sheetsResponse = await fetch(
       process.env.SHEETS_WEB_APP_URL,
@@ -122,11 +150,7 @@ export default async (request) => {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          secret: process.env.SHEETS_SECRET,
-          message: message,
-          source: "RunningHub"
-        })
+        body: JSON.stringify(payload)
       }
     );
 
@@ -146,19 +170,23 @@ export default async (request) => {
       sheetsResult = JSON.parse(sheetsText);
     } catch {
       throw new Error(
-        "Invalid Google Apps Script response: " + sheetsText
+        "Invalid Google Apps Script response: " +
+        sheetsText
       );
     }
 
     if (sheetsResult.status !== "success") {
       throw new Error(
-        sheetsResult.message || "Google Sheets update failed"
+        sheetsResult.message ||
+        "Google Sheets update failed"
       );
     }
 
     return Response.json({
       status: "success",
       decoded_message: message,
+      row: row,
+      sheet: payload.sheetName || "Legacy RunningHub",
       image_width: decodedImage.width,
       image_height: decodedImage.height,
       decoder: "Local JavaScript",
